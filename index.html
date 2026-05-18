@@ -290,7 +290,6 @@
   
   <div id="grid" class="grid"></div>
 
-  <!-- Show More Button -->
   <div id="showMoreWrap" class="show-more-wrap">
     <button class="show-more-btn" onclick="showMore()">Show More</button>
   </div>
@@ -305,9 +304,9 @@
     <div class="player-info">
       <h1 id="playerTitle"></h1>
       <div class="row">
-        <div class="avatar" id="playerAvatar">S</div>
+        <div class="avatar" id="playerAvatar">V</div>
         <div>
-          <div class="channel-name">summer01234</div>
+          <div class="channel-name" id="playerChannel">Unknown</div>
           <div style="color: var(--text-dim); font-size: 13px;" id="playerSize"></div>
         </div>
       </div>
@@ -324,7 +323,7 @@
   // ============== Config ==============
   const DATASET_USER  = "summer01234";
   const DATASET_REPO  = "yt";
-  const THUMB_REPO    = "yt_t"; // Thumbnail dataset repository
+  const THUMB_REPO    = "yt_t";
 
   const API_BASE       = `https://huggingface.co/api/datasets/${DATASET_USER}/${DATASET_REPO}/tree/main`;
   const RESOLVE_BASE   = `https://huggingface.co/datasets/${DATASET_USER}/${DATASET_REPO}/resolve/main/`;
@@ -343,13 +342,32 @@
     return VIDEO_EXTS.some(ext => lower.endsWith(ext));
   }
 
-  function cleanTitle(path) {
-    let title = path.replace(/\.[^.]+$/, "");
-    title = title.replace(/^\d{10,}_/, "");
-    title = title.replace(/\s*\[[A-Za-z0-9_-]{6,}\]\s*$/, "");
-    title = title.replace(/[-_ ]?\d{4}-\d{2}-\d{2}$/, "");
+  // Parses filename into Channel Name and Video Title
+  function parseVideoInfo(path) {
+    const baseName = path.split('/').pop();
+    const extIdx = baseName.lastIndexOf('.');
+    let nameWithoutExt = extIdx !== -1 ? baseName.substring(0, extIdx) : baseName;
+
+    // 1. Remove the numeric prefix ID (e.g. "8220897715539_") FIRST
+    nameWithoutExt = nameWithoutExt.replace(/^\d{10,}_/, "");
+
+    let channel = "Unknown";
+    let rawTitle = nameWithoutExt;
+
+    // 2. NOW find the first underscore to extract the actual channel name
+    const firstUscoreIdx = nameWithoutExt.indexOf('_');
+    if (firstUscoreIdx > 0) {
+      channel = nameWithoutExt.substring(0, firstUscoreIdx);
+      rawTitle = nameWithoutExt.substring(firstUscoreIdx + 1);
+    }
+
+    // 3. Clean up the remaining title
+    let title = rawTitle;
+    title = title.replace(/\s*\[[A-Za-z0-9_-]{6,}\]\s*$/, ""); // remove youtube suffix IDs
+    title = title.replace(/[-_ ]?\d{4}-\d{2}-\d{2}$/, ""); // remove dates
     title = title.replace(/_/g, " ").replace(/\s+/g, " ").trim();
-    return title || path;
+
+    return { channel, title: title || nameWithoutExt };
   }
 
   function formatBytes(bytes) {
@@ -410,10 +428,9 @@
       card.className = "card";
       card.onclick = () => openPlayer(v);
 
-      const initial = v.title.charAt(0).toUpperCase() || "V";
+      const initial = v.channel.charAt(0).toUpperCase() || "V";
       const sizeStr = formatBytes(v.size);
 
-      // We now load the jpg thumbnail using the <img> tag
       card.innerHTML = `
         <div class="thumb">
           <img
@@ -427,7 +444,7 @@
           <div class="avatar">${initial}</div>
           <div class="info">
             <h3 class="title">${escapeHtml(v.title)}</h3>
-            <p class="channel">summer01234</p>
+            <p class="channel">${escapeHtml(v.channel)}</p>
             <p class="stats">${sizeStr}</p>
           </div>
         </div>
@@ -448,7 +465,6 @@
     renderBatch(false); 
   }
 
-  // Replace broken thumbnails with a generic placeholder icon
   function onThumbError(imgEl) {
     const wrap = imgEl.parentElement;
     imgEl.remove();
@@ -463,16 +479,19 @@
 
   // ============== Player ==============
   function openPlayer(v) {
-    const modal  = document.getElementById("modal");
-    const player = document.getElementById("player");
-    const title  = document.getElementById("playerTitle");
-    const sizeEl = document.getElementById("playerSize");
-    const av     = document.getElementById("playerAvatar");
+    const modal     = document.getElementById("modal");
+    const player    = document.getElementById("player");
+    const title     = document.getElementById("playerTitle");
+    const sizeEl    = document.getElementById("playerSize");
+    const av        = document.getElementById("playerAvatar");
+    const channelEl = document.getElementById("playerChannel");
 
     player.src = v.url;
     title.textContent = v.title;
+    channelEl.textContent = v.channel;
     sizeEl.textContent = formatBytes(v.size);
-    av.textContent = v.title.charAt(0).toUpperCase() || "V";
+    av.textContent = v.channel.charAt(0).toUpperCase() || "V";
+    
     modal.classList.add("open");
     document.body.style.overflow = "hidden";
   }
@@ -502,7 +521,9 @@
     if (!q) {
       currentList = allVideos;
     } else {
-      currentList = allVideos.filter(v => v.title.toLowerCase().includes(q));
+      currentList = allVideos.filter(v => 
+        v.title.toLowerCase().includes(q) || v.channel.toLowerCase().includes(q)
+      );
     }
     
     renderBatch(true);
@@ -524,14 +545,15 @@
       const videoFiles = files.filter(f => f.type === "file" && isVideoFile(f.path));
       
       allVideos = videoFiles.map(f => {
-        // Change the extension of the video file to .jpg for the thumbnail
         const thumbPath = f.path.replace(/\.[^.]+$/, ".jpg");
+        const { channel, title } = parseVideoInfo(f.path);
 
         return {
           path: f.path,
-          title: cleanTitle(f.path),
+          title: title,
+          channel: channel,
           url: RESOLVE_BASE + encodeURIComponent(f.path),
-          thumbUrl: THUMB_RESOLVE + encodeURIComponent(thumbPath), // Route to the thumbnail dataset
+          thumbUrl: THUMB_RESOLVE + encodeURIComponent(thumbPath),
           size: f.size || (f.lfs && f.lfs.size) || 0,
         };
       });
