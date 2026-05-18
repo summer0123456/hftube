@@ -96,9 +96,21 @@
   /* Grid */
   .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    grid-template-columns: repeat(4, 1fr); /* 4 columns on desktop */
     gap: 24px 16px;
   }
+  
+  /* Responsive fallbacks for smaller screens */
+  @media (max-width: 1200px) {
+    .grid { grid-template-columns: repeat(3, 1fr); }
+  }
+  @media (max-width: 900px) {
+    .grid { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media (max-width: 600px) {
+    .grid { grid-template-columns: repeat(1, 1fr); }
+  }
+
   .card {
     cursor: pointer;
     display: flex;
@@ -330,7 +342,7 @@
   const THUMB_RESOLVE  = `https://huggingface.co/datasets/${DATASET_USER}/${THUMB_REPO}/resolve/main/`;
   
   const VIDEO_EXTS     = [".mp4", ".webm", ".mov", ".mkv", ".ogv", ".m4v"];
-  const VIDEOS_PER_PAGE = 8;
+  const VIDEOS_PER_PAGE = 12; // Adjusted to perfectly fill 3 rows in a 4 column layout
 
   let allVideos = [];
   let currentList = []; 
@@ -348,13 +360,13 @@
     const extIdx = baseName.lastIndexOf('.');
     let nameWithoutExt = extIdx !== -1 ? baseName.substring(0, extIdx) : baseName;
 
-    // 1. Remove the numeric prefix ID (e.g. "8220897715539_") FIRST
+    // 1. Remove the numeric prefix ID
     nameWithoutExt = nameWithoutExt.replace(/^\d{10,}_/, "");
 
     let channel = "Unknown";
     let rawTitle = nameWithoutExt;
 
-    // 2. NOW find the first underscore to extract the actual channel name
+    // 2. Find the first underscore to extract the actual channel name
     const firstUscoreIdx = nameWithoutExt.indexOf('_');
     if (firstUscoreIdx > 0) {
       channel = nameWithoutExt.substring(0, firstUscoreIdx);
