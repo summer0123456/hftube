@@ -172,6 +172,25 @@
   .channel { font-size: 13px; color: var(--text-dim); margin: 0; }
   .stats   { font-size: 13px; color: var(--text-dim); margin: 0; }
 
+  /* Load More Button */
+  .show-more-wrap {
+    text-align: center;
+    margin-top: 40px;
+    display: none; /* hidden by default */
+  }
+  .show-more-btn {
+    padding: 10px 30px;
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 24px;
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+  .show-more-btn:hover { background: var(--bg-hover); }
+
   /* Status / loading */
   .status {
     text-align: center;
@@ -279,7 +298,13 @@
     <div class="spinner"></div>
     <p>Loading videos from Hugging Face...</p>
   </div>
+  
   <div id="grid" class="grid"></div>
+
+  <!-- Show More Button -->
+  <div id="showMoreWrap" class="show-more-wrap">
+    <button class="show-more-btn" onclick="showMore()">Show More</button>
+  </div>
 </main>
 
 <div id="modal" class="modal" onclick="closePlayerOnBackdrop(event)">
@@ -313,8 +338,12 @@
   const API_BASE      = `https://huggingface.co/api/datasets/${DATASET_USER}/${DATASET_REPO}/tree/main`;
   const RESOLVE_BASE  = `https://huggingface.co/datasets/${DATASET_USER}/${DATASET_REPO}/resolve/main/`;
   const VIDEO_EXTS    = [".mp4", ".webm", ".mov", ".mkv", ".ogv", ".m4v"];
+  
+  const VIDEOS_PER_PAGE = 8; // Number of videos to load at a time
 
   let allVideos = [];
+  let currentList = []; // The list currently being viewed (all videos, or filtered by search)
+  let currentRenderedCount = 0; // Tracks how many videos have been rendered so far
 
   // ============== Helpers ==============
   function isVideoFile(path) {
@@ -323,15 +352,10 @@
   }
 
   function cleanTitle(path) {
-    // strip extension
     let title = path.replace(/\.[^.]+$/, "");
-    // strip leading "8220911125309_" style numeric prefix from huggingface_hub uploads
     title = title.replace(/^\d{10,}_/, "");
-    // strip trailing youtube id in brackets [xxxxxxxx]
     title = title.replace(/\s*\[[A-Za-z0-9_-]{6,}\]\s*$/, "");
-    // strip trailing date like 2026-05-18
     title = title.replace(/[-_ ]?\d{4}-\d{2}-\d{2}$/, "");
-    // unescape weird ｜ char and underscores
     title = title.replace(/_/g, " ").replace(/\s+/g, " ").trim();
     return title || path;
   }
@@ -344,14 +368,12 @@
     return v.toFixed(v < 10 ? 1 : 0) + " " + units[i];
   }
 
-  // ============== Fetch (with pagination support) ==============
+  // ============== Fetch (with API pagination support) ==============
   async function fetchAllFiles() {
     const files = [];
     let cursor = null;
 
-    // The HF tree API supports cursor-based pagination via the `?cursor=` query
-    // and exposes a `Link` header `next` for the next page. We use cursor param.
-    for (let page = 0; page < 50; page++) { // safety cap = 50 pages
+    for (let page = 0; page < 50; page++) { 
       const url = cursor
         ? `${API_BASE}?cursor=${encodeURIComponent(cursor)}`
         : API_BASE;
@@ -361,28 +383,41 @@
       if (!Array.isArray(batch) || batch.length === 0) break;
       files.push(...batch);
 
-      // Try to parse Link header for next cursor
       const link = res.headers.get("link") || res.headers.get("Link");
       if (link) {
         const m = link.match(/<[^>]*[?&]cursor=([^&>]+)[^>]*>;\s*rel="next"/);
         if (m) { cursor = decodeURIComponent(m[1]); continue; }
       }
-      break; // no next page
+      break; 
     }
     return files;
   }
 
-  // ============== Rendering ==============
-  function renderVideos(videos) {
+  // ============== Rendering (Pagination / Lazy Load Logic) ==============
+  
+  // Renders a chunk of videos. If reset=true, it clears the grid first.
+  function renderBatch(reset = false) {
     const grid = document.getElementById("grid");
-    grid.innerHTML = "";
+    const showMoreWrap = document.getElementById("showMoreWrap");
 
-    if (videos.length === 0) {
+    if (reset) {
+      grid.innerHTML = "";
+      currentRenderedCount = 0;
+    }
+
+    if (currentList.length === 0) {
       grid.innerHTML = '<div class="status" style="grid-column: 1/-1;">No videos found.</div>';
+      showMoreWrap.style.display = 'none';
       return;
     }
 
-    videos.forEach((v, i) => {
+    // Determine the next 8 videos to slice from our list
+    const startIndex = currentRenderedCount;
+    const endIndex = currentRenderedCount + VIDEOS_PER_PAGE;
+    const videosToRender = currentList.slice(startIndex, endIndex);
+
+    // Create cards for just this batch
+    videosToRender.forEach(v => {
       const card = document.createElement("div");
       card.className = "card";
       card.onclick = () => openPlayer(v);
@@ -412,10 +447,23 @@
       `;
       grid.appendChild(card);
     });
+
+    // Update count
+    currentRenderedCount += videosToRender.length;
+
+    // Show or hide the "Show More" button depending on if there are more videos left
+    if (currentRenderedCount >= currentList.length) {
+      showMoreWrap.style.display = 'none';
+    } else {
+      showMoreWrap.style.display = 'block';
+    }
+  }
+
+  function showMore() {
+    renderBatch(false); // Append the next batch without clearing
   }
 
   function onThumbMeta(videoEl) {
-    // Add duration overlay once metadata is loaded
     if (!isFinite(videoEl.duration)) return;
     const dur = videoEl.duration;
     const mins = Math.floor(dur / 60);
@@ -477,15 +525,23 @@
   // ============== Search ==============
   function onSearch() {
     const q = document.getElementById("searchInput").value.trim().toLowerCase();
-    if (!q) return renderVideos(allVideos);
-    const filtered = allVideos.filter(v => v.title.toLowerCase().includes(q));
-    renderVideos(filtered);
+    
+    // Update our working list based on the search
+    if (!q) {
+      currentList = allVideos;
+    } else {
+      currentList = allVideos.filter(v => v.title.toLowerCase().includes(q));
+    }
+    
+    // Reset and render the first 8 of the search results
+    renderBatch(true);
   }
+
   document.getElementById("searchInput").addEventListener("keydown", e => {
     if (e.key === "Enter") onSearch();
     if (e.key === "Escape") {
       e.target.value = "";
-      renderVideos(allVideos);
+      onSearch(); // Reset search
     }
   });
 
@@ -495,21 +551,26 @@
     try {
       const files = await fetchAllFiles();
       const videoFiles = files.filter(f => f.type === "file" && isVideoFile(f.path));
+      
       allVideos = videoFiles.map(f => ({
         path: f.path,
         title: cleanTitle(f.path),
         url: RESOLVE_BASE + encodeURIComponent(f.path),
         size: f.size || (f.lfs && f.lfs.size) || 0,
       }));
-      // newest-ish first (HF returns alphabetical; we keep order but you could sort)
+      
+      // Initialize view
+      currentList = allVideos; 
       statusEl.style.display = "none";
-      renderVideos(allVideos);
+      
+      // Render first 8 videos
+      renderBatch(true); 
+
     } catch (err) {
       statusEl.innerHTML = `<p style="color:#ff6b6b;">Failed to load videos: ${escapeHtml(err.message)}</p>`;
     }
   })();
 </script>
 
-<script defer src="https://static.cloudflareinsights.com/beacon.min.js/v833ccba57c9e4d2798f2e76cebdd09a11778172276447" integrity="sha512-57MDmcccJXYtNnH+ZiBwzC4jb2rvgVCEokYN+L/nLlmO8rfYT/gIpW2A569iJ/3b+0UEasghjuZH/ma3wIs/EQ==" data-cf-beacon='{"version":"2024.11.0","token":"4edd5f8ec12a48cfa682ab8261b80a79","server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
 </body>
 </html>
