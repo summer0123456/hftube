@@ -98,11 +98,11 @@
   /* Grid */
   .grid {
     display: grid;
-    grid-template-columns: repeat(4, 1fr); /* 4 columns on desktop */
+    grid-template-columns: repeat(4, 1fr);
     gap: 24px 16px;
   }
   
-  /* Responsive fallbacks for smaller screens */
+  /* Responsive */
   @media (max-width: 1200px) {
     .grid { grid-template-columns: repeat(3, 1fr); }
   }
@@ -160,7 +160,7 @@
     color: #fff;
     font-size: 14px;
   }
-  .info { flex: 1; min-width: 0; }
+  .info { flex: 1; min-width: 0; overflow: hidden; }
   .title {
     font-size: 14px;
     font-weight: 600;
@@ -172,10 +172,18 @@
     -webkit-box-orient: vertical;
     overflow: hidden;
   }
-  .channel { font-size: 13px; color: var(--text-dim); margin: 0; }
-  .stats   { font-size: 13px; color: var(--text-dim); margin: 0; }
+  
+  /* Fixed Channel & Stats to never wrap */
+  .channel, .stats { 
+    font-size: 13px; 
+    color: var(--text-dim); 
+    margin: 0; 
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 
-  /* Load More Button */
+  /* Load More */
   .show-more-wrap {
     text-align: center;
     margin-top: 40px;
@@ -253,8 +261,21 @@
     display: flex;
     align-items: center;
     gap: 12px;
+    overflow: hidden;
   }
-  .player-info .channel-name { font-weight: 600; }
+  .player-info .channel-name { 
+    font-weight: 600; 
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .player-info .player-stats {
+    color: var(--text-dim); 
+    font-size: 13px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
   .close-btn {
     position: absolute;
     top: 16px;
@@ -319,9 +340,9 @@
       <h1 id="playerTitle"></h1>
       <div class="row">
         <div class="avatar" id="playerAvatar">V</div>
-        <div>
+        <div style="min-width: 0; overflow: hidden;">
           <div class="channel-name" id="playerChannel">Unknown</div>
-          <div style="color: var(--text-dim); font-size: 13px;" id="playerSize"></div>
+          <div class="player-stats" id="playerSize"></div>
         </div>
       </div>
     </div>
@@ -344,7 +365,7 @@
   const THUMB_RESOLVE  = `https://huggingface.co/datasets/${DATASET_USER}/${THUMB_REPO}/resolve/main/`;
   
   const VIDEO_EXTS     = [".mp4", ".webm", ".mov", ".mkv", ".ogv", ".m4v"];
-  const VIDEOS_PER_PAGE = 12; // Adjusted to perfectly fill 3 rows in a 4 column layout
+  const VIDEOS_PER_PAGE = 12;
 
   let allVideos = [];
   let currentList = []; 
@@ -356,29 +377,24 @@
     return VIDEO_EXTS.some(ext => lower.endsWith(ext));
   }
 
-  // Parses filename into Channel Name and Video Title
   function parseVideoInfo(path) {
     const baseName = path.split('/').pop();
     const extIdx = baseName.lastIndexOf('.');
     let nameWithoutExt = extIdx !== -1 ? baseName.substring(0, extIdx) : baseName;
 
-    // 1. Remove the numeric prefix ID
     nameWithoutExt = nameWithoutExt.replace(/^\d{10,}_/, "");
-
     let channel = "Unknown";
     let rawTitle = nameWithoutExt;
 
-    // 2. Find the first underscore to extract the actual channel name
     const firstUscoreIdx = nameWithoutExt.indexOf('_');
     if (firstUscoreIdx > 0) {
       channel = nameWithoutExt.substring(0, firstUscoreIdx);
       rawTitle = nameWithoutExt.substring(firstUscoreIdx + 1);
     }
 
-    // 3. Clean up the remaining title
     let title = rawTitle;
-    title = title.replace(/\s*\[[A-Za-z0-9_-]{6,}\]\s*$/, ""); // remove youtube suffix IDs
-    title = title.replace(/[-_ ]?\d{4}-\d{2}-\d{2}$/, ""); // remove dates
+    title = title.replace(/\s*\[[A-Za-z0-9_-]{6,}\]\s*$/, "");
+    title = title.replace(/[-_ ]?\d{4}-\d{2}-\d{2}$/, ""); 
     title = title.replace(/_/g, " ").replace(/\s+/g, " ").trim();
 
     return { channel, title: title || nameWithoutExt };
@@ -392,15 +408,38 @@
     return v.toFixed(v < 10 ? 1 : 0) + " " + units[i];
   }
 
-  // ============== Fetch (with API pagination support) ==============
+  function formatRelativeTime(isoString) {
+    if (!isoString) return "Unknown date";
+    const date = new Date(isoString);
+    const now = new Date();
+    const diffMs = now - date;
+    const diffMins = Math.floor(diffMs / 60000);
+    
+    if (diffMins < 60) {
+      return diffMins < 1 ? "Just now" : `${diffMins} min${diffMins !== 1 ? 's' : ''} ago`;
+    }
+    const diffHours = Math.floor(diffMins / 60);
+    if (diffHours < 24) {
+      return `${diffHours} hour${diffHours !== 1 ? 's' : ''} ago`;
+    }
+    const diffDays = Math.floor(diffHours / 24);
+    if (diffDays < 30) {
+      return `${diffDays} day${diffDays !== 1 ? 's' : ''} ago`;
+    }
+    
+    return date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  }
+
+  // ============== Fetch ==============
   async function fetchAllFiles() {
     const files = [];
     let cursor = null;
 
     for (let page = 0; page < 50; page++) { 
       const url = cursor
-        ? `${API_BASE}?cursor=${encodeURIComponent(cursor)}`
-        : API_BASE;
+        ? `${API_BASE}?expand=true&cursor=${encodeURIComponent(cursor)}`
+        : `${API_BASE}?expand=true`;
+      
       const res = await fetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status} fetching file list`);
       const batch = await res.json();
@@ -417,7 +456,7 @@
     return files;
   }
 
-  // ============== Rendering (Pagination / Lazy Load Logic) ==============
+  // ============== Rendering ==============
   function renderBatch(reset = false) {
     const grid = document.getElementById("grid");
     const showMoreWrap = document.getElementById("showMoreWrap");
@@ -444,6 +483,7 @@
 
       const initial = v.channel.charAt(0).toUpperCase() || "V";
       const sizeStr = formatBytes(v.size);
+      const statsStr = v.relativeDate !== "Unknown date" ? `${sizeStr} • ${v.relativeDate}` : sizeStr;
 
       card.innerHTML = `
         <div class="thumb">
@@ -459,7 +499,7 @@
           <div class="info">
             <h3 class="title">${escapeHtml(v.title)}</h3>
             <p class="channel">${escapeHtml(v.channel)}</p>
-            <p class="stats">${sizeStr}</p>
+            <p class="stats">${statsStr}</p>
           </div>
         </div>
       `;
@@ -467,17 +507,10 @@
     });
 
     currentRenderedCount += videosToRender.length;
-
-    if (currentRenderedCount >= currentList.length) {
-      showMoreWrap.style.display = 'none';
-    } else {
-      showMoreWrap.style.display = 'block';
-    }
+    showMoreWrap.style.display = currentRenderedCount >= currentList.length ? 'none' : 'block';
   }
 
-  function showMore() {
-    renderBatch(false); 
-  }
+  function showMore() { renderBatch(false); }
 
   function onThumbError(imgEl) {
     const wrap = imgEl.parentElement;
@@ -503,7 +536,9 @@
     player.src = v.url;
     title.textContent = v.title;
     channelEl.textContent = v.channel;
-    sizeEl.textContent = formatBytes(v.size);
+    
+    const sizeStr = formatBytes(v.size);
+    sizeEl.textContent = v.relativeDate !== "Unknown date" ? `${sizeStr} • ${v.relativeDate}` : sizeStr;
     av.textContent = v.channel.charAt(0).toUpperCase() || "V";
     
     modal.classList.add("open");
@@ -561,11 +596,13 @@
       allVideos = videoFiles.map(f => {
         const thumbPath = f.path.replace(/\.[^.]+$/, ".jpg");
         const { channel, title } = parseVideoInfo(f.path);
+        const isoDate = (f.lastCommit && f.lastCommit.date) ? f.lastCommit.date : null;
 
         return {
           path: f.path,
           title: title,
           channel: channel,
+          relativeDate: formatRelativeTime(isoDate),
           url: RESOLVE_BASE + encodeURIComponent(f.path),
           thumbUrl: THUMB_RESOLVE + encodeURIComponent(thumbPath),
           size: f.size || (f.lfs && f.lfs.size) || 0,
